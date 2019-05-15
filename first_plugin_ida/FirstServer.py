@@ -218,7 +218,7 @@ class FIRSTServer(object):
                 will not perform the operation.
 
         Args:
-            config (:obj:`Configuration`): FIRST Server configuration information.
+            config (:obj:`str` or :obj: 'json'): FIRST Server configuration information.
             h_md5 (:obj:`str`): The MD5 of the sample.
             crc32 (:obj:`int`): The CRC32 of the sample.
             h_sha1 (:obj:`str`, optional): The SHA1 of the sample.
@@ -872,12 +872,12 @@ class FIRSTServer(object):
             params = self._min_info()
             data = {}
             for m in metadata[i:i + self.MAX_CHUNK]:
-                signature = m.signature
+                signature = m['signature']
                 if not signature:
                     continue
-
-                data[m.address] = {'opcodes': b64encode(m.signature),
-                                   'apis': m.apis,
+                #   Changed the encoding part
+                data[m['address']] = {'opcodes': m['signature'],
+                                   'apis': m['apis'],
                                    'architecture': architecture}
 
             params['functions'] = json.dumps(data)
