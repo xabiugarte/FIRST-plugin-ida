@@ -1,6 +1,6 @@
 # -------------------------------------------------------------------------------
 #
-#   IDA Pro Plug-in: Function Identification and Recovery Signature Tool (FIRSTCore)
+#   Function Identification and Recovery Signature Tool (FIRST) python library
 #   Copyright (C) 2016  Angel M. Villegas
 #
 #   This program is free software; you can redistribute it and/or modify
@@ -21,10 +21,6 @@
 #   ------------
 #   Requests (docs.python-requests.org/)
 #
-#   Installation
-#   ------------
-#   Drag and drop into IDA Pro's plugin folder for IDA Pro 6.9 SP1 and higher
-#
 # -------------------------------------------------------------------------------
 
 #   Third Party Python Modules
@@ -34,7 +30,7 @@ try:
 except ImportError:
     required_modules_loaded &= False
     print
-    'FIRSTCore requires Python module requests'
+    'FIRST library requires Python module requests'
 
 try:
     from requests_kerberos import HTTPKerberosAuth
@@ -55,7 +51,7 @@ from base64 import b64encode
 # -------------------------------------------------------------------------------
 
 class FirstServerError(Exception):
-    '''FIRSTCore Exception Class'''
+    '''FIRST library Exception Class'''
 
     def __init__(self, value):
         self.value = value
@@ -63,17 +59,18 @@ class FirstServerError(Exception):
     def __str__(self):
         return repr(self.value)
 
-logger = logging.getLogger('FIRSTCore')
+logger = logging.getLogger('FIRST')
+
 # Remove existing handlers
 while len(logger.handlers) > 0:
     h = logger.handlers[0]
     logger.removeHandler(h)
 
-class MetadataServer(object):
-    '''Class to contain a FIRSTCore match and its data.
+class FunctionMetadata(object):
+    '''Class to contain a FIRST match and its data.
 
-    FIRSTCore Metadata container, it encapsulates the data received from the
-    FIRSTCore server.
+    FIRST metadata container, it encapsulates the data received from the
+    FIRST server.
 
     Args:
         data (:obj:`dict`): Dictionary with the following key values set:
@@ -84,7 +81,7 @@ class MetadataServer(object):
             the engine's description.
 
     Raises:
-        FIRSTCore.FirstServerError: If data is not a :obj:`dict` or does not have the
+        FirstServerError: If data is not a :obj:`dict` or does not have the
             required keys.
     '''
 
@@ -116,6 +113,9 @@ class MetadataServer(object):
                 and (self.comment == other.comment)
                 and (self.id == other.id)
                 and (self.creator == other.created))
+
+    def get_raw_data(self):
+        return {'data': self.__data, 'address': self.__address, 'engines': self.__engines}
 
     @property
     def address(self):
@@ -172,10 +172,6 @@ class MetadataServer(object):
             return {}
 
         return self.__engines
-
-    def get_raw_data(self):
-        return {'data': self.__data, 'address': self.__address, 'engines': self.__engines}
-
 
 class FIRSTServer(object):
     
@@ -300,7 +296,8 @@ class FIRSTServer(object):
                 or (('checkin' in response) and not response['checkin'])):
             #   Try to check in again with the next sever communication
             self.checkedin = False
-            return
+
+        return self.checkedin
 
     def _sendp(self, action, params={}, raw=False):
         self.checkin(action)
@@ -398,6 +395,7 @@ class FIRSTServer(object):
             logger.error(msg)
             return
 
+        print(response)
         if 'status_code' not in dir(response):
             return None
         elif 200 != response.status_code:
@@ -470,8 +468,8 @@ class FIRSTServer(object):
         return data and ('status' in data) and ('connected' == data['status'])
 
     #   Signature URLS
-    def add(self, metadata, data_callback=None, complete_callback=None, architecture=None):
-        '''Adds function metadata to FIRSTCore.
+    def add(self, metadata, architecture, data_callback=None, complete_callback=None):
+        '''Adds function metadata to FIRST.
 
         This is a long operation, thus it has the option of providing a
         ``data_callback`` and ``complete_callback`` arguments. Those
@@ -481,8 +479,8 @@ class FIRSTServer(object):
         ``data_callback_prototype`` and ``complete_callback_prototype``.
 
         Args:
-            metadata (:obj:`list` of :obj:`dict`: The metadata to be added to FIRSTCore.
-                metadata (dict): Dictionary of function metadata (type to be flled in later
+            metadata (:obj:`list` of :obj:`dict`: The metadata to be added to FIRST.
+                metadata (dict): Dictionary of function metadata
                     {
                         address
                         signature
@@ -492,29 +490,30 @@ class FIRSTServer(object):
                         apis
                         id
                     }
+            architecture (:obj: 'str') string that's either ['intel32', 'intel64', 'arm32', 'mips']
             data_callback (:obj:`data_callback_prototype`, optional):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
-            architecture (:obj: 'str') string that's either ['intel32', 'intel64', 'arm32', 'mips']
 
         Returns:
-            threading.Thread. The thread created for the operation.
+            threading.Thread. The thread created for the operation, if this is a multi-threaded operation
+            list of dict: JSON data returned from the server. None on failure. If this is not a multi-threaded operation
         '''
         if self.multithreaded:
-            args = (metadata, data_callback, complete_callback)
+            args = (metadata, architecture, data_callback, complete_callback)
             thread = threading.Thread(target=self.__thread_add, args=args)
             thread.daemon = True
             thread.start()
             return thread
         else:
-            self.__thread_add(metadata, data_callback, complete_callback, architecture)
+            return self.__thread_add(metadata, architecture, data_callback, complete_callback)
 
-    def __thread_add(self, metadata, data_callback=None, complete_callback=None, architecture=None):
+    def __thread_add(self, metadata, architecture, data_callback=None, complete_callback=None):
         '''thread'''
 
         thread = threading.current_thread()
-        self.threads[thread] = {'results': [], 'complete': False,
+        self.threads[thread] = {'results': {}, 'complete': False,
                                 'stop': False}
 
         if not isinstance(metadata, list):
@@ -531,12 +530,12 @@ class FIRSTServer(object):
             data = {}
             for m in metadata[i:i + self.MAX_CHUNK]:
                 data[m['address']] = {'architecture': architecture,
-                                        'opcodes': b64encode(m['signature']),
-                                        'name': m['name'],
+                                       'opcodes': b64encode(m['signature']),
+                                       'name': m['name'],
                                        'prototype': m['prototype'],
                                        'comment': m['comment'],
                                        'apis': m['apis'],
-                                       'id': m['id']}
+                                       'id': m.get('id', None)}
 
             params['functions'] = json.dumps(data)
             try:
@@ -545,12 +544,24 @@ class FIRSTServer(object):
                 self.threads[thread]['complete'] = True
                 if complete_callback:
                     complete_callback(thread, self.threads[thread])
-                return
+                    return
+                else:
+                    return []
 
-            if response:
-                self.threads[thread]['results'].append(response)
+            if response and 'failed' in response and not response['failed'] and 'results' in response:
+                [{u'failed': False, u'results': {u'3735929054': u'000000000000000000000aa97b'}}]
+                results = {}
+                for addr in response['results']:
+                    results[int(addr)] = response['results'][addr]
+                # Merge results into thread results
+                for address in results:
+                    if address not in self.threads[thread]['results']:
+                        self.threads[thread]['results'][address] = results[address]
+                    else:
+                        self.threads[thread]['results'][address].extend(results[address])
+
                 if data_callback:
-                    data_callback(thread, response)
+                    data_callback(thread, results)
 
             if self.threads[thread]['stop']:
                 break
@@ -558,6 +569,8 @@ class FIRSTServer(object):
         self.threads[thread]['complete'] = True
         if complete_callback:
             complete_callback(thread, self.threads[thread])
+        else:
+            return self.threads[thread]['results']
 
     def history(self, metadata):
         '''Gets annotation history from FIRSTCore.
@@ -565,7 +578,7 @@ class FIRSTServer(object):
         This is a short operation and is a blocking call.
 
         Args:
-            metadata (:obj:`dict`: The metadata to be added to FIRSTCore.
+            metadata (:obj:`dict`: The metadata to be added to FIRST
                 metadata (dict): Dictionary of function metadata (type to be flled in later)
                     {
                         address
@@ -582,11 +595,21 @@ class FIRSTServer(object):
         '''
         FIRSTId = metadata['id']
 
-        if not re.match('^[\da-f]{25}$', FIRSTId):
+        if not re.match('^[\da-f]{26}$', FIRSTId):
             return None
 
+        data = {'opcodes': b64encode(metadata['signature']),
+                'name': metadata['name'],
+                'prototype': metadata['prototype'],
+                'comment': metadata['comment'],
+                'apis': metadata['apis'],
+                'id': metadata['id']}
+
+        params = {}
+        params['metadata'] = json.dumps(data)
+
         try:
-            response = self._sendp('history', {'metadata': json.dumps([metadata])})
+            response = self._sendp('history', params)
         except FirstServerError as e:
             return None
 
@@ -650,6 +673,7 @@ class FIRSTServer(object):
         try:
             response = self._sendg('delete', params)
         except FirstServerError as e:
+            print(str(e))
             return None
 
         return response
@@ -680,7 +704,7 @@ class FIRSTServer(object):
             thread.start()
             return thread
         else:
-            self.__thread_created(data_callback, complete_callback)
+            return self.__thread_created(data_callback, complete_callback)
 
     def __thread_created(self, data_callback=None, complete_callback=None):
         '''Thread to get created data'''
@@ -701,6 +725,9 @@ class FIRSTServer(object):
                 self.threads[thread]['complete'] = True
                 if complete_callback:
                     complete_callback(thread, self.threads[thread])
+                    return 
+                else:
+                    return []
 
             if not response:
                 continue
@@ -715,8 +742,8 @@ class FIRSTServer(object):
 
             if ('results' in response) and response['results']:
                 metadata = response['results']
-                data = [MetadataServer(x, x['id']) for x in metadata]
-                self.threads[thread]['results'].append(data)
+                data = [FunctionMetadata(x, x['id']) for x in metadata]
+                self.threads[thread]['results'].extend(data)
                 if data_callback:
                     data_callback(thread, data)
 
@@ -725,6 +752,9 @@ class FIRSTServer(object):
         self.threads[thread]['complete'] = True
         if complete_callback:
             complete_callback(thread, self.threads[thread])
+            return
+        else:
+            return self.threads[thread]['results']
 
     def get(self, metadata_ids, data_callback=None, complete_callback=None):
         '''Retrieves FIRSTCore annotations the user has created.
@@ -737,8 +767,8 @@ class FIRSTServer(object):
         ``data_callback_prototype`` and ``complete_callback_prototype``.
 
         Args:
-            metadata (:obj:`list` of :obj:`MetadataShim`): The metadata to
-                be retrieved from FIRSTCore.
+            metadata (:obj:`list` of :str:): The metadata ids to
+                be retrieved from FIRST.
             data_callback (:obj:`data_callback_prototype`, optional):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
@@ -754,26 +784,22 @@ class FIRSTServer(object):
             thread.start()
             return thread
         else:
-            self.__thread_get(metadata_ids, data_callback, complete_callback)
+            return self.__thread_get(metadata_ids, data_callback, complete_callback)
 
     def __thread_get(self, metadata, data_callback=None, complete_callback=None):
         '''Thread to get metadata'''
         thread = threading.current_thread()
-        self.threads[thread] = {'results': [], 'complete': False,
+        self.threads[thread] = {'results': {}, 'complete': False,
                                 'stop': False}
 
         if not isinstance(metadata, list):
             metadata = [metadata]
 
-        if False in [isinstance(m, dict) for m in metadata]:
-            self.threads[thread]['complete'] = True
-            return
-
         for i in xrange(0, len(metadata), self.MAX_CHUNK):
             if self.threads[thread]['stop']:
                 break
 
-            data = [m['id'] for m in metadata[i:i + self.MAX_CHUNK]]
+            data = [m for m in metadata[i:i + self.MAX_CHUNK]]
 
             try:
                 response = self._sendp('get', {'metadata': json.dumps(data)})
@@ -781,7 +807,9 @@ class FIRSTServer(object):
                 self.threads[thread]['complete'] = True
                 if complete_callback:
                     complete_callback(thread, self.threads[thread])
-                return
+                    return
+                else:
+                    return []
 
             if (not response or ('results' not in response)
                     or (dict != type(response['results']))
@@ -790,16 +818,20 @@ class FIRSTServer(object):
 
             results = {}
             for metadata_id, details in response['results'].iteritems():
-                results[metadata_id] = MetadataServer(details)
+                results[metadata_id] = FunctionMetadata(details)
 
             if 0 < len(results):
-                self.threads[thread]['results'].append(results)
+                for metadata_id in results:
+                    self.threads[thread]['results'][metadata_id] = results[metadata_id]
                 if data_callback:
                     data_callback(thread, results)
 
         self.threads[thread]['complete'] = True
         if complete_callback:
             complete_callback(thread, self.threads[thread])
+            return
+        else:
+            return self.threads[thread]['results']
 
     def scan(self, metadata, architecture, data_callback=None, complete_callback=None):
         '''Queries FIRSTCore for matches.
@@ -812,30 +844,36 @@ class FIRSTServer(object):
         ``data_callback_prototype`` and ``complete_callback_prototype``.
 
         Args:
-            metadata (:obj:`list` of :obj:`MetadataShim`): The metadata to
-                be queried for matches in FIRSTCore.
+            metadata (:obj:`list` of :obj:`dict`: The metadata to be scanned on FIRST.
+                metadata (dict): Dictionary of function metadata
+                    {
+                        address
+                        signature
+                        apis
+                    }
+            architecture (:obj: 'str', valid architecture string. Valid values are: intel32, intel64, arm32, mips
             data_callback (:obj:`data_callback_prototype`, optional):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
-            architecture (:obj: 'str', valid architecture string. Valid values are: intel32, intel64, arm32, mips
 
         Returns:
             threading.Thread. The thread created for the operation.
+            list of dict: JSON data returned from the server. None on failure. If this is not a multi-threaded operation
         '''
         if self.multithreaded:
-            args = (metadata, data_callback, complete_callback)
+            args = (metadata, architecture, data_callback, complete_callback)
             thread = threading.Thread(target=self.__thread_scan, args=args)
             thread.daemon = True
             thread.start()
             return thread
         else:
-            self.__thread_scan(metadata, data_callback, complete_callback, architecture)
+            return self.__thread_scan(metadata, architecture, data_callback, complete_callback)
 
-    def __thread_scan(self, metadata, data_callback=None, complete_callback=None, architecture=None):
+    def __thread_scan(self, metadata, architecture, data_callback=None, complete_callback=None):
         '''Thread to query FIRSTCore for metadata'''
         thread = threading.current_thread()
-        self.threads[thread] = {'results': [], 'complete': False,
+        self.threads[thread] = {'results': {}, 'complete': False,
                                 'stop': False}
 
         if not isinstance(metadata, list):
@@ -871,7 +909,9 @@ class FIRSTServer(object):
                 self.threads[thread]['complete'] = True
                 if complete_callback:
                     complete_callback(thread, self.threads[thread])
-                return
+                    return
+                else:
+                    return []
 
             if (not response or ('results' not in response)
                     or (dict != type(response['results']))
@@ -888,17 +928,24 @@ class FIRSTServer(object):
 
                 for match in matches[address_str]:
                     engines = {x: engine_info[x] for x in match['engines']}
-                    data = MetadataServer(match, address, engines)
+                    data = FunctionMetadata(match, address, engines)
                     functions.append(data)
 
                 if len(functions) > 0:
                     results[address] = functions
 
             if 0 < len(results):
-                self.threads[thread]['results'].append(results)
+                # Merge results into thread results
+                for address in results:
+                    if address not in self.threads[thread]['results']:
+                        self.threads[thread]['results'][address] = results[address]
+                    else:
+                        self.threads[thread]['results'][address].extend(results[address])
                 if data_callback:
                     data_callback(thread, results)
 
         self.threads[thread]['complete'] = True
         if complete_callback:
             complete_callback(thread, self.threads[thread])
+        else:
+            return self.threads[thread]['results']
