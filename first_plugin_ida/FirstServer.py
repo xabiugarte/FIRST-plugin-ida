@@ -51,29 +51,8 @@ import threading
 import logging
 from base64 import b64encode
 
-
-#   Constants
-# -------------------------------------------------------------------------------
-FIRST_INDEX = {
-    'hashes': 1,
-    'malware_name': 2,
-}
-
-#   Global Variables
-# -------------------------------------------------------------------------------
-FIRST_DB = 'FIRST_data'
-
-
 #   Logging configuration
 # -------------------------------------------------------------------------------
-
-class FirstPrintHandler(logging.Handler):
-    def emit(self, record):
-        if record.levelno == logging.DEBUG:
-            text = record.getMessage()
-            print(text)
-            return True
-
 
 class FirstServerError(Exception):
     '''FIRSTCore Exception Class'''
@@ -193,6 +172,9 @@ class MetadataServer(object):
             return {}
 
         return self.__engines
+
+    def get_raw_data(self):
+        return {'data': self.__data, 'address': self.__address, 'engines': self.__engines}
 
 
 class FIRSTServer(object):
@@ -876,7 +858,7 @@ class FIRSTServer(object):
                 if not signature:
                     continue
                 #   Changed the encoding part
-                data[m['address']] = {'opcodes': m['signature'],
+                data[m['address']] = {'opcodes': b64encode(m['signature']),
                                    'apis': m['apis'],
                                    'architecture': architecture}
 
@@ -885,6 +867,7 @@ class FIRSTServer(object):
             try:
                 response = self._sendp('scan', params)
             except FirstServerError as e:
+                print(e)
                 self.threads[thread]['complete'] = True
                 if complete_callback:
                     complete_callback(thread, self.threads[thread])
