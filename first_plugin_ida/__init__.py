@@ -22,11 +22,11 @@ def main():
 
         ida_plugin_path = raw_input('Enter full path to IDA\'s plugins folder: ')
         if not os.path.exists(ida_plugin_path):
-            print '[Error] Path provided does not exist.'
+            print('[Error] Path provided does not exist.')
             raise ExitException()
 
         if not os.path.isdir(ida_plugin_path):
-            print '[Error] Path provided is not a directory.'
+            print('[Error] Path provided is not a directory.')
             raise ExitException()
 
         if (os.name == 'posix') and (platform.system() == 'Darwin'):
@@ -36,7 +36,7 @@ def main():
             ida_path = os.path.dirname(ida_plugin_path)
 
             #   Copy requests to IDA's python folder
-            print '- Copying FIRST dependencies to IDA\'s python folder...'
+            print('- Copying FIRST dependencies to IDA\'s python folder...')
             cmd = 'cp -r {} {}/python/requests/'.format(requests_path, ida_path)
             os.system(cmd)
 
@@ -51,17 +51,17 @@ def main():
 
         else:
             #   Doesn't support other systems
-            print '- Unfortunately the current OS is not supported.'
+            print ('- Unfortunately the current OS is not supported.')
             raise ExitException()
 
         #   Copy plugin to IDA's plugin directory
         shutil.copy(first_path, ida_plugin_path)
         msg = ( '- FIRST\'s IDA Pro Integration has been installed. Plugin is\n'
                 '  located at:\n  {}')
-        print msg.format(os.path.join(ida_plugin_path, 'first.py'))
+        print (msg.format(os.path.join(ida_plugin_path, 'first.py')))
 
     except ExitException:
         pass
 
     finally:
-        print '...exiting...'
+        print('...exiting...')

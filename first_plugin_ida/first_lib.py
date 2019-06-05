@@ -525,12 +525,12 @@ class FIRSTServer(object):
         else:
             raise FirstServerError('Invalid type')
 
-        for i in xrange(0, len(metadata), self.MAX_CHUNK):
+        for i in range(0, len(metadata), self.MAX_CHUNK):
             params = self._min_info()
             data = {}
             for m in metadata[i:i + self.MAX_CHUNK]:
                 data[m['address']] = {'architecture': architecture,
-                                       'opcodes': b64encode(m['signature']),
+                                       'opcodes': b64encode(m['signature']).decode('utf-8'),
                                        'name': m['name'],
                                        'prototype': m['prototype'],
                                        'comment': m['comment'],
@@ -598,7 +598,7 @@ class FIRSTServer(object):
         if not re.match('^[\da-f]{26}$', FIRSTId):
             return None
 
-        data = {'opcodes': b64encode(metadata['signature']),
+        data = {'opcodes': b64encode(metadata['signature']).decode('utf-8'),
                 'name': metadata['name'],
                 'prototype': metadata['prototype'],
                 'comment': metadata['comment'],
@@ -795,7 +795,7 @@ class FIRSTServer(object):
         if not isinstance(metadata, list):
             metadata = [metadata]
 
-        for i in xrange(0, len(metadata), self.MAX_CHUNK):
+        for i in range(0, len(metadata), self.MAX_CHUNK):
             if self.threads[thread]['stop']:
                 break
 
@@ -817,7 +817,7 @@ class FIRSTServer(object):
                 continue
 
             results = {}
-            for metadata_id, details in response['results'].iteritems():
+            for metadata_id, details in response['results'].items():
                 results[metadata_id] = FunctionMetadata(details)
 
             if 0 < len(results):
@@ -885,7 +885,7 @@ class FIRSTServer(object):
 
         subkeys = {'engines', 'matches'}
 
-        for i in xrange(0, len(metadata), self.MAX_CHUNK):
+        for i in range(0, len(metadata), self.MAX_CHUNK):
             if self.threads[thread]['stop']:
                 break
 
@@ -896,7 +896,7 @@ class FIRSTServer(object):
                 if not signature:
                     continue
                 #   Changed the encoding part
-                data[m['address']] = {'opcodes': b64encode(m['signature']),
+                data[m['address']] = {'opcodes': b64encode(m['signature']).decode('utf-8'),
                                    'apis': m['apis'],
                                    'architecture': architecture}
 

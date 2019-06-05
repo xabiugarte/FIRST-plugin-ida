@@ -5,10 +5,10 @@ from base64 import b64decode
 
 def create_first_connection(multithreaded = False):
     config = {'auth': None, 
-              'server': "first.talosintelligence.com",
+              'server': "localhost",
               'proto': "https",
               'port': 443,
-              'verify': True,
+              'verify': False,
               'api_key': os.environ.get('FIRST_API_KEY', None) }
 
     return FIRSTServer(config, 
@@ -44,6 +44,23 @@ def test_scan():
     server = create_first_connection()
     assert(server)
 
+    # First add the function we are going to scan
+    metadata = {'signature': b64decode("VYvsi0UIZosIg8ACZoXJdfUrRQjR+Ehdww=="),
+                'name': "test_function",
+                'prototype': "int test_fuction()",
+                'comment': "This is a comment for test_function",
+                'apis': ["CreateProcessA"],
+                'address': 0xDEADC0DE
+                }
+
+    my_results = server.add(metadata, "intel32")
+
+    assert(my_results)
+
+    if 0xDEADC0DE in my_results:
+        metadata_id = my_results[0xDEADC0DE]
+
+
     metadata = {'signature': b64decode("VYvsi0UIZosIg8ACZoXJdfUrRQjR+Ehdww=="),
                 'apis': [],
                 'address': 0xDEADC0DE }
@@ -63,8 +80,27 @@ def test_scan_multithreaded():
     global my_results
     global is_complete
 
-    server = create_first_connection(multithreaded=True)
+    server = create_first_connection(multithreaded=False)
     assert(server)
+
+    # First add the function we are going to scan
+    metadata = {'signature': b64decode("VYvsi0UIZosIg8ACZoXJdfUrRQjR+Ehdww=="),
+                'name': "test_function",
+                'prototype': "int test_fuction()",
+                'comment': "This is a comment for test_function",
+                'apis': ["CreateProcessA"],
+                'address': 0xDEADC0DE
+                }
+
+    my_results = server.add(metadata, "intel32")
+
+    assert(my_results)
+
+    if 0xDEADC0DE in my_results:
+        metadata_id = my_results[0xDEADC0DE]
+
+    # Switch to multithreaded
+    server.multithreaded = True
 
     def my_data_callback(thread, results):
         global my_results
@@ -188,10 +224,10 @@ def test_add_scan_modify_history_delete():
     assert(results)
 
     # delete the function
-    # response = server.delete(metadata_id)
-    # assert(response)
-    # print(response)
-    # assert(False)
+    response = server.delete(metadata_id)
+    assert(response)
+    assert('failed' in response and not response['failed'])
+    assert('deleted' in response and response['deleted'])
 
 def test_add_apply_unapply():
     '''
