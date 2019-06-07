@@ -2,13 +2,14 @@ from first_lib import FIRSTServer
 from first_lib import FunctionMetadata
 import os
 from base64 import b64decode
+import threading
 
 def create_first_connection(multithreaded = False):
     config = {'auth': None, 
-              'server': "localhost",
+              'server': "first.talosintelligence.com",
               'proto': "https",
               'port': 443,
-              'verify': False,
+              'verify': True,
               'api_key': os.environ.get('FIRST_API_KEY', None) }
 
     return FIRSTServer(config, 
@@ -73,14 +74,20 @@ def test_scan():
     assert(len(my_results[0xDEADC0DE]) > 0)
     assert(isinstance(my_results[0xDEADC0DE][0], FunctionMetadata))
 
-def test_scan_multithreaded():
+def test_scan_async():
     '''
         Test scan for function
     '''
-    global my_results
     global is_complete
+    global total_result_length
+    global partial_result_length
+    global my_results
 
-    server = create_first_connection(multithreaded=False)
+    is_complete = False
+    total_result_length = 0
+    partial_result_length = 0
+
+    server = create_first_connection()
     assert(server)
 
     # First add the function we are going to scan
@@ -89,49 +96,82 @@ def test_scan_multithreaded():
                 'prototype': "int test_fuction()",
                 'comment': "This is a comment for test_function",
                 'apis': ["CreateProcessA"],
-                'address': 0xDEADC0DE
-                }
+                'address': 0xDEADC0DE }
 
-    my_results = server.add(metadata, "intel32")
+    add_results = server.add(metadata, "intel32")
 
-    assert(my_results)
+    assert(add_results)
 
-    if 0xDEADC0DE in my_results:
-        metadata_id = my_results[0xDEADC0DE]
+    if 0xDEADC0DE in add_results:
+        metadata_id = add_results[0xDEADC0DE]
 
-    # Switch to multithreaded
-    server.multithreaded = True
+    def my_data_callback(sub_results):
+        global total_result_length
+        global partial_result_length
+        for address in sub_results:
+            partial_result_length += len(sub_results[address])
 
-    def my_data_callback(thread, results):
+    def my_complete_callback(results):
         global my_results
-        for address in results:
-            if address not in my_results:
-                my_results[address] = results[address]
-            else:
-                my_results[address].extend(results[address])
-
-    def my_complete_callback(thread, thread_structure):
         global is_complete
-        is_complete = True
+        global total_result_length
+        global partial_result_length
 
-    my_results = {}
+        is_complete = True
+        my_results = results
+        for address in results:
+            total_result_length += len(results[address])
+
+
     is_complete = False
     metadata = {'signature': b64decode("VYvsi0UIZosIg8ACZoXJdfUrRQjR+Ehdww=="),
                 'apis': [],
                 'address': 0xDEADC0DE}
 
-    thread = server.scan(metadata, "intel32", data_callback = my_data_callback, complete_callback = my_complete_callback)
+    my_results = None
+    args = (metadata, "intel32", my_data_callback, my_complete_callback)
+    thread = threading.Thread(target=server.scan, args=args)
+    thread.daemon = True
+    thread.start()
 
     # Wait until operation is complete
     import time
     while not is_complete:
-        time.sleep(0.5)
+        time.sleep(0.1)
 
     assert(my_results)
-    assert(len(my_results) == 1)
+    assert(total_result_length == partial_result_length)
+    assert(total_result_length > 0)
     assert(0xDEADC0DE in my_results)
     assert(len(my_results[0xDEADC0DE]) > 0)
     assert(isinstance(my_results[0xDEADC0DE][0], FunctionMetadata))
+
+
+    # Now do it again, but stop the execution of the function
+    is_complete = False
+    metadata = {'signature': b64decode("VYvsi0UIZosIg8ACZoXJdfUrRQjR+Ehdww=="),
+                'apis': [],
+                'address': 0xDEADC0DE}
+
+    def my_should_stop():
+        return True
+
+    total_result_length = 0
+    partial_result_length = 0
+    my_results = None
+    args = (metadata, "intel32", my_data_callback, my_complete_callback, my_should_stop)
+    thread = threading.Thread(target=server.scan, args=args)
+    thread.daemon = True
+    thread.start()
+
+    # Wait until operation is complete
+    import time
+    while not is_complete:
+        time.sleep(0.1)
+
+    assert(my_results is not None)
+    assert(total_result_length == partial_result_length)
+    assert(total_result_length == 0)
 
 def test_add_scan_modify_history_delete():
     '''

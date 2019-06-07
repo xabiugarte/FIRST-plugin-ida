@@ -39,6 +39,11 @@ except ImportError:
     '[1st] Kerberos support is not avaialble'
     HTTPKerberosAuth = None
 
+VALID_ARCHITECTURES = ['intel32', 'intel64', 'arm32', 'mips']
+
+def is_valid_architecture(arch):
+    return (arch in VALID_ARCHITECTURES)
+
 #   Python Modules
 import re
 import json
@@ -833,60 +838,57 @@ class FIRSTServer(object):
         else:
             return self.threads[thread]['results']
 
-    def scan(self, metadata, architecture, data_callback=None, complete_callback=None):
+    def scan(self, metadata, architecture, data_callback=None, complete_callback=None, should_stop=None):
         '''Queries FIRSTCore for matches.
 
         This is a long operation, thus it has the option of providing a
-        ``data_callback`` and ``complete_callback`` arguments. Those
-        arguments are functions that will be called with the newly returned
-        data and when the whole operation is complete, respectively. Both
-        functions should follow the below their respective prototypes;
-        ``data_callback_prototype`` and ``complete_callback_prototype``.
+        ``data_callback``, ``complete_callback``, and ``should_stop`` arguments. The first
+        two arguments are functions that will be called with the newly returned
+        data and when the whole operation is completed, respectively. Both
+        functions should follow their respective prototypes:
+        ``def data_callback(sub_results)`` and ``def complete_callback(results)``.
+        The ``should_stop`` function is called on every iteration of the loop that 
+        queries data from the server. If this function is called asynchronously (e.g., 
+        in a separate thread), it is possible to use the return value of should_stop()
+        to stop the execution of the function and return prematurely.
 
         Args:
             metadata (:obj:`list` of :obj:`dict`: The metadata to be scanned on FIRST.
                 metadata (dict): Dictionary of function metadata
                     {
-                        address
-                        signature
-                        apis
+                        address (int)
+                        signature (:obj:`str` or :obj:`bytes`)
+                        apis (:obj:`list` of :obj:`str`)
                     }
             architecture (:obj: 'str', valid architecture string. Valid values are: intel32, intel64, arm32, mips
             data_callback (:obj:`data_callback_prototype`, optional):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
+            should_stop (:obj:`should_stop_prototype`, optional):
+                A function called by this function before every query to the server, 
+                to check if the process should be stopped.
 
         Returns:
-            threading.Thread. The thread created for the operation.
-            list of dict: JSON data returned from the server. None on failure. If this is not a multi-threaded operation
+            list of dict: JSON data returned from the server. None on failure.
         '''
-        if self.multithreaded:
-            args = (metadata, architecture, data_callback, complete_callback)
-            thread = threading.Thread(target=self.__thread_scan, args=args)
-            thread.daemon = True
-            thread.start()
-            return thread
-        else:
-            return self.__thread_scan(metadata, architecture, data_callback, complete_callback)
-
-    def __thread_scan(self, metadata, architecture, data_callback=None, complete_callback=None):
-        '''Thread to query FIRSTCore for metadata'''
-        thread = threading.current_thread()
-        self.threads[thread] = {'results': {}, 'complete': False,
-                                'stop': False}
+        results = {}
 
         if not isinstance(metadata, list):
             metadata = [metadata]
 
         if False in [isinstance(m, dict) for m in metadata]:
-            self.threads[thread]['complete'] = True
-            return
+            raise TypeError("The metadata parameter should be of type 'dict' or list('dict')") 
+
+        if not is_valid_architecture(architecture):
+            raise ValueError("The architecture must be one of the following: %s" % str(VALID_ARCHITECTURES))
 
         subkeys = {'engines', 'matches'}
 
         for i in range(0, len(metadata), self.MAX_CHUNK):
-            if self.threads[thread]['stop']:
+            # Check if we must stop the loop, used
+            # for asynchronous operations
+            if should_stop and should_stop():
                 break
 
             params = self._min_info()
@@ -895,7 +897,6 @@ class FIRSTServer(object):
                 signature = m['signature']
                 if not signature:
                     continue
-                #   Changed the encoding part
                 data[m['address']] = {'opcodes': b64encode(m['signature']).decode('utf-8'),
                                    'apis': m['apis'],
                                    'architecture': architecture}
@@ -905,13 +906,9 @@ class FIRSTServer(object):
             try:
                 response = self._sendp('scan', params)
             except FirstServerError as e:
-                print(e)
-                self.threads[thread]['complete'] = True
                 if complete_callback:
-                    complete_callback(thread, self.threads[thread])
-                    return
-                else:
-                    return []
+                    complete_callback(results)
+                return results
 
             if (not response or ('results' not in response)
                     or (dict != type(response['results']))
@@ -919,7 +916,7 @@ class FIRSTServer(object):
                     or (0 == len(response['results']['matches']))):
                 continue
 
-            results = {}
+            sub_results = {}
             engine_info = response['results']['engines']
             matches = response['results']['matches']
             for address_str in matches:
@@ -932,20 +929,18 @@ class FIRSTServer(object):
                     functions.append(data)
 
                 if len(functions) > 0:
-                    results[address] = functions
+                    sub_results[address] = functions
 
-            if 0 < len(results):
-                # Merge results into thread results
-                for address in results:
-                    if address not in self.threads[thread]['results']:
-                        self.threads[thread]['results'][address] = results[address]
+            if 0 < len(sub_results):
+                # Merge sub_results into global results
+                for address in sub_results:
+                    if address not in results:
+                        results[address] = sub_results[address]
                     else:
-                        self.threads[thread]['results'][address].extend(results[address])
+                        results[address].extend(sub_results[address])
                 if data_callback:
-                    data_callback(thread, results)
+                    data_callback(sub_results)
 
-        self.threads[thread]['complete'] = True
         if complete_callback:
-            complete_callback(thread, self.threads[thread])
-        else:
-            return self.threads[thread]['results']
+            complete_callback(results)
+        return results
