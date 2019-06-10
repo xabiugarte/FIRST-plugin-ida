@@ -4,7 +4,7 @@ import os
 from base64 import b64decode
 import threading
 
-def create_first_connection(multithreaded = False):
+def create_first_connection():
     config = {'auth': None, 
               'server': "first.talosintelligence.com",
               'proto': "https",
@@ -16,8 +16,7 @@ def create_first_connection(multithreaded = False):
                        'fe6aaa2d4844f5ee6e7e69fde2d3639d', 
                        1862706092, 
                        h_sha1 = 'b2fc96681b49e5361fed431f518fb755210f02b2',
-                       h_sha256='8ec9cd069d8c347859247019062dbcccc25ff7005118689eb163f1af970eb047',
-                       multithreaded=multithreaded)
+                       h_sha256='8ec9cd069d8c347859247019062dbcccc25ff7005118689eb163f1af970eb047')
 
 def test_test_connection():
     '''

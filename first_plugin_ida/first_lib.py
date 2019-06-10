@@ -1,7 +1,10 @@
 # -------------------------------------------------------------------------------
 #
 #   Function Identification and Recovery Signature Tool (FIRST) python library
-#   Copyright (C) 2016  Angel M. Villegas
+#
+#   Copyright (C) 2019 Cisco Talos Security Intelligence and Research Group
+#
+#   Authors: Angel M. Villegas, Xabier Ugarte-Pedrero
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License as published by
@@ -23,6 +26,13 @@
 #
 # -------------------------------------------------------------------------------
 
+#   Python Modules
+import re
+import json
+
+import logging
+from base64 import b64encode
+
 #   Third Party Python Modules
 required_modules_loaded = True
 try:
@@ -32,37 +42,13 @@ except ImportError:
     print
     'FIRST library requires Python module requests'
 
-try:
-    from requests_kerberos import HTTPKerberosAuth
-except ImportError:
-    print
-    '[1st] Kerberos support is not avaialble'
-    HTTPKerberosAuth = None
-
 VALID_ARCHITECTURES = ['intel32', 'intel64', 'arm32', 'mips']
 
 def is_valid_architecture(arch):
-    return (arch in VALID_ARCHITECTURES)
-
-#   Python Modules
-import re
-import json
-import threading
-
-import logging
-from base64 import b64encode
+    return ((isinstance(arch, str) or isinstance(arch, unicode)) and (arch in VALID_ARCHITECTURES))
 
 #   Logging configuration
-# -------------------------------------------------------------------------------
-
-class FirstServerError(Exception):
-    '''FIRST library Exception Class'''
-
-    def __init__(self, value):
-        self.value = value
-
-    def __str__(self):
-        return repr(self.value)
+#   ---------------------
 
 logger = logging.getLogger('FIRST')
 
@@ -70,6 +56,9 @@ logger = logging.getLogger('FIRST')
 while len(logger.handlers) > 0:
     h = logger.handlers[0]
     logger.removeHandler(h)
+
+#   Helper class to contain metadata
+#   --------------------------------
 
 class FunctionMetadata(object):
     '''Class to contain a FIRST match and its data.
@@ -86,7 +75,7 @@ class FunctionMetadata(object):
             the engine's description.
 
     Raises:
-        FirstServerError: If data is not a :obj:`dict` or does not have the
+        TypeError: If data is not a :obj:`dict` or does not have the
             required keys.
     '''
 
@@ -95,7 +84,7 @@ class FunctionMetadata(object):
         required = ['name', 'prototype', 'creator', 'id', 'comment', 'rank']
 
         if (dict != type(data) or not set(required).issubset(data.keys())):
-            raise FirstServerError(error_str)
+            raise TypeError(error_str)
 
         self.__data = data
         self.__address = address
@@ -201,7 +190,14 @@ class FIRSTServer(object):
                 will not perform the operation.
 
         Args:
-            config (:obj:`str` or :obj: 'json'): FIRST Server configuration information.
+            config (:obj:`dict` or :obj: 'json'): FIRST Server configuration information.
+                {
+                    'server' (:obj: `str`) The server domain or IP address.
+                    'proto' (:obj: `str`) The protocol to use ('http' or 'https')
+                    'port': (:obj: `int`) The port to use (e.g.: 80, 443)
+                    'verify' (:obj: `bool`) For HTTPS, verify the certificate or skip verification
+                    'api_key' (:obj: `str`) The API key to use for authentication
+                }
             h_md5 (:obj:`str`): The MD5 of the sample.
             crc32 (:obj:`int`): The CRC32 of the sample.
             h_sha1 (:obj:`str`, optional): The SHA1 of the sample.
@@ -229,19 +225,16 @@ class FIRSTServer(object):
         'scan': 'api/metadata/scan/{0[api_key]}',
     }
 
-    def __init__(self, config, h_md5, crc32, h_sha1=None, h_sha256=None, multithreaded=False):
+    def __init__(self, config, h_md5, crc32, h_sha1=None, h_sha256=None):
         self.error_log = []
-        self.threads = {}
         self.checkedin = False
         self.binary_info = {'md5': h_md5, 'crc32': crc32,
                             'sha1': h_sha1, 'sha256': h_sha256}
 
-        self.auth, self.server, self.protocol = [None] * 3
+        self.server, self.protocol = [None] * 2
         self.port, self.verify, self.api_key = [None] * 3
-        self.multithreaded = multithreaded
 
         if isinstance(config, dict) or isinstance(config, json):
-            self.auth = config['auth']
             self.server = config['server']
             self.protocol = config['proto']
             self.port = config['port']
@@ -315,20 +308,11 @@ class FIRSTServer(object):
             if params[key] is None:
                 params[key] = ''
 
-        authentication = None
-        if self.auth:
-            if not HTTPKerberosAuth:
-                logger.debug('[1st] Kerberos module is not loaded\n')
-                return
-
-            authentication = HTTPKerberosAuth()
-
         url = self.urn.format(self, self.paths[action])
         try:
             response = requests.post(url.format(self._user()),
                                      data=params,
-                                     verify=self.verify,
-                                     auth=authentication)
+                                     verify=self.verify)
 
             if raw:
                 return response
@@ -338,7 +322,7 @@ class FIRSTServer(object):
             msg = ('Unable to connect to FIRSTCore server at {0}\n'
                    'Retry operation').format(self.server)
             logger.error(msg)
-            raise FirstServerError('cannot connect')
+            raise ConnectionError(title)
 
         except requests.exceptions.Timeout as e:
             title = 'Cannot connect to FIRSTCore'
@@ -369,19 +353,10 @@ class FIRSTServer(object):
 
         params.update(self._user())
 
-        authentication = None
-        if self.auth:
-            if not HTTPKerberosAuth:
-                logger.debug('[1st] Kerberos module is not loaded\n')
-                return
-
-            authentication = HTTPKerberosAuth()
-
         url = self.urn.format(self, self.paths[action])
         try:
             response = requests.get(url.format(params),
-                                    verify=self.verify,
-                                    auth=authentication)
+                                    verify=self.verify)
 
             if raw:
                 return response
@@ -391,7 +366,7 @@ class FIRSTServer(object):
             msg = ('Unable to connect to FIRSTCore server at {0}\n'
                    'Retry operation').format(self.server)
             logger.error(msg)
-            raise FirstServerError('cannot connect')
+            raise ConnectionError(title)
 
         except requests.exceptions.Timeout as e:
             title = 'Cannot connect to FIRSTCore'
@@ -400,7 +375,6 @@ class FIRSTServer(object):
             logger.error(msg)
             return
 
-        print(response)
         if 'status_code' not in dir(response):
             return None
         elif 200 != response.status_code:
@@ -431,27 +405,6 @@ class FIRSTServer(object):
         return {'md5': self.binary_info['md5'],
                 'crc32': self.binary_info['crc32']}
 
-    def stop_operation(self, server_thread):
-        '''Signals a server thread to stop its work.
-
-        Args:
-            server_thread (:obj:`threading.Thread`): The thread to stop.
-        '''
-        if server_thread not in self.threads:
-            return
-
-        self.threads[server_thread]['stop'] = True
-        self.threads[server_thread]['complete'] = True
-
-    def remove_operation(self, server_thread):
-        '''Removes operation from server thread structure.
-
-        Args:
-            server_thread (:obj:`threading.Thread`): The thread to remove.
-        '''
-        if server_thread in self.threads:
-            del self.threads[server_thread]
-
     #   Test connection URL
     def test_connection(self):
         '''Interacts with server to see if there is a valid connection.
@@ -467,21 +420,25 @@ class FIRSTServer(object):
 
         try:
             data = self._sendg('test', {'api_key': self.api_key})
-        except FirstServerError as e:
+        except ConnectionError as e:
             data = None
 
         return data and ('status' in data) and ('connected' == data['status'])
 
     #   Signature URLS
-    def add(self, metadata, architecture, data_callback=None, complete_callback=None):
+    def add(self, metadata, architecture, data_callback=None, complete_callback=None, should_stop=None):
         '''Adds function metadata to FIRST.
 
         This is a long operation, thus it has the option of providing a
-        ``data_callback`` and ``complete_callback`` arguments. Those
-        arguments are functions that will be called with the newly returned
-        data and when the whole operation is complete, respectively. Both
-        functions should follow the below their respective prototypes;
-        ``data_callback_prototype`` and ``complete_callback_prototype``.
+        ``data_callback``, ``complete_callback``, and ``should_stop`` arguments. The first
+        two arguments are functions that will be called with the newly returned
+        data and when the whole operation is completed, respectively. Both
+        functions should follow their respective prototypes:
+        ``def data_callback(sub_results)`` and ``def complete_callback(results)``.
+        The ``should_stop`` function is called on every iteration of the loop that 
+        queries data from the server. If this function is called asynchronously (e.g., 
+        in a separate thread), it is possible to use the return value of should_stop()
+        to stop the execution of the function and return prematurely.
 
         Args:
             metadata (:obj:`list` of :obj:`dict`: The metadata to be added to FIRST.
@@ -500,35 +457,25 @@ class FIRSTServer(object):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
+            should_stop (:obj:`should_stop_prototype`, optional):
+                A function called by this function before every query to the server, 
+                to check if the process should be stopped.
+
 
         Returns:
-            threading.Thread. The thread created for the operation, if this is a multi-threaded operation
-            list of dict: JSON data returned from the server. None on failure. If this is not a multi-threaded operation
+            list of dict: JSON data returned from the server. None on failure.
         '''
-        if self.multithreaded:
-            args = (metadata, architecture, data_callback, complete_callback)
-            thread = threading.Thread(target=self.__thread_add, args=args)
-            thread.daemon = True
-            thread.start()
-            return thread
-        else:
-            return self.__thread_add(metadata, architecture, data_callback, complete_callback)
 
-    def __thread_add(self, metadata, architecture, data_callback=None, complete_callback=None):
-        '''thread'''
-
-        thread = threading.current_thread()
-        self.threads[thread] = {'results': {}, 'complete': False,
-                                'stop': False}
+        results = {}
 
         if not isinstance(metadata, list):
             metadata = [metadata]
 
-        if isinstance(architecture, str):
-            if architecture not in ['intel32', 'intel64', 'arm32', 'mips']:
-                raise FirstServerError('Invalid architecture')
-        else:
-            raise FirstServerError('Invalid type')
+        if False in [isinstance(m, dict) for m in metadata]:
+            raise TypeError("The metadata parameter should be of type 'dict' or list('dict')")
+
+        if not is_valid_architecture(architecture):
+            raise ValueError("The architecture must be one of the following: %s" % str(VALID_ARCHITECTURES))
 
         for i in range(0, len(metadata), self.MAX_CHUNK):
             params = self._min_info()
@@ -545,37 +492,32 @@ class FIRSTServer(object):
             params['functions'] = json.dumps(data)
             try:
                 response = self._sendp('add', params)
-            except FirstServerError as e:
-                self.threads[thread]['complete'] = True
+            except ConnectionError as e:
                 if complete_callback:
-                    complete_callback(thread, self.threads[thread])
-                    return
-                else:
-                    return []
+                    complete_callback(results)
+                return results
 
             if response and 'failed' in response and not response['failed'] and 'results' in response:
-                [{u'failed': False, u'results': {u'3735929054': u'000000000000000000000aa97b'}}]
-                results = {}
+                sub_results = {}
                 for addr in response['results']:
-                    results[int(addr)] = response['results'][addr]
+                    sub_results[int(addr)] = response['results'][addr]
                 # Merge results into thread results
-                for address in results:
-                    if address not in self.threads[thread]['results']:
-                        self.threads[thread]['results'][address] = results[address]
+                for address in sub_results:
+                    if address not in results:
+                        results[address] = sub_results[address]
                     else:
-                        self.threads[thread]['results'][address].extend(results[address])
+                        results[address].extend(sub_results[address])
 
                 if data_callback:
-                    data_callback(thread, results)
+                    data_callback(sub_results)
 
-            if self.threads[thread]['stop']:
+            if should_stop and should_stop():
                 break
 
-        self.threads[thread]['complete'] = True
         if complete_callback:
-            complete_callback(thread, self.threads[thread])
-        else:
-            return self.threads[thread]['results']
+            complete_callback(results)
+
+        return results
 
     def history(self, metadata):
         '''Gets annotation history from FIRSTCore.
@@ -615,7 +557,7 @@ class FIRSTServer(object):
 
         try:
             response = self._sendp('history', params)
-        except FirstServerError as e:
+        except ConnectionError as e:
             return None
 
         return response
@@ -636,7 +578,7 @@ class FIRSTServer(object):
 
         try:
             response = self._sendp('applied', params)
-        except FirstServerError as e:
+        except ConnectionError as e:
             return None
 
         return response
@@ -657,7 +599,7 @@ class FIRSTServer(object):
 
         try:
             response = self._sendp('unapplied', params)
-        except FirstServerError as e:
+        except ConnectionError as e:
             return None
 
         return response
@@ -677,62 +619,55 @@ class FIRSTServer(object):
 
         try:
             response = self._sendg('delete', params)
-        except FirstServerError as e:
+        except ConnectionError as e:
             print(str(e))
             return None
 
         return response
 
-    def created(self, data_callback=None, complete_callback=None):
+
+    def created(self, data_callback=None, complete_callback=None, should_stop=None):
         '''Retrieves FIRSTCore annotations the user has created.
 
         This is a long operation, thus it has the option of providing a
-        ``data_callback`` and ``complete_callback`` arguments. Those
-        arguments are functions that will be called with the newly returned
-        data and when the whole operation is complete, respectively. Both
-        functions should follow the below their respective prototypes;
-        ``data_callback_prototype`` and ``complete_callback_prototype``.
+        ``data_callback``, ``complete_callback``, and ``should_stop`` arguments. The first
+        two arguments are functions that will be called with the newly returned
+        data and when the whole operation is completed, respectively. Both
+        functions should follow their respective prototypes:
+        ``def data_callback(sub_results)`` and ``def complete_callback(results)``.
+        The ``should_stop`` function is called on every iteration of the loop that 
+        queries data from the server. If this function is called asynchronously (e.g., 
+        in a separate thread), it is possible to use the return value of should_stop()
+        to stop the execution of the function and return prematurely.
 
         Args:
             data_callback (:obj:`data_callback_prototype`, optional):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
+            should_stop (:obj:`should_stop_prototype`, optional):
+                A function called by this function before every query to the server, 
+                to check if the process should be stopped.
 
         Returns:
-            threading.Thread. The thread created for the operation.
+            list: A list of FunctionMetadata instances
         '''
-        if self.multithreaded:
-            args = (data_callback, complete_callback)
-            thread = threading.Thread(target=self.__thread_created, args=args)
-            thread.daemon = True
-            thread.start()
-            return thread
-        else:
-            return self.__thread_created(data_callback, complete_callback)
+        results = []
 
-    def __thread_created(self, data_callback=None, complete_callback=None):
-        '''Thread to get created data'''
-        thread = threading.current_thread()
-        self.threads[thread] = {'results': [], 'complete': False,
-                                'stop': False}
         page = 1
         total_pages = 0
         first_time = True
         while (first_time
-               or ((page <= total_pages) and (not self.threads[thread]['stop']))):
+               or ((page <= total_pages) and (not (should_stop and should_stop())))):
             if first_time:
                 first_time = False
 
             try:
                 response = self._sendg('created', {'page': page})
-            except FirstServerError as e:
-                self.threads[thread]['complete'] = True
+            except ConnectionError as e:
                 if complete_callback:
-                    complete_callback(thread, self.threads[thread])
-                    return 
-                else:
-                    return []
+                    complete_callback(results)
+                return results
 
             if not response:
                 continue
@@ -748,28 +683,29 @@ class FIRSTServer(object):
             if ('results' in response) and response['results']:
                 metadata = response['results']
                 data = [FunctionMetadata(x, x['id']) for x in metadata]
-                self.threads[thread]['results'].extend(data)
+                results.extend(data)
                 if data_callback:
-                    data_callback(thread, data)
-
+                    data_callback(data)
             page += 1
 
-        self.threads[thread]['complete'] = True
         if complete_callback:
-            complete_callback(thread, self.threads[thread])
-            return
-        else:
-            return self.threads[thread]['results']
+            complete_callback(results)
+        return results
 
-    def get(self, metadata_ids, data_callback=None, complete_callback=None):
+    def get(self, metadata, data_callback=None, complete_callback=None, should_stop=None):
         '''Retrieves FIRSTCore annotations the user has created.
 
         This is a long operation, thus it has the option of providing a
-        ``data_callback`` and ``complete_callback`` arguments. Those
-        arguments are functions that will be called with the newly returned
-        data and when the whole operation is complete, respectively. Both
-        functions should follow the below their respective prototypes;
-        ``data_callback_prototype`` and ``complete_callback_prototype``.
+        ``data_callback``, ``complete_callback``, and ``should_stop`` arguments. The first
+        two arguments are functions that will be called with the newly returned
+        data and when the whole operation is completed, respectively. Both
+        functions should follow their respective prototypes:
+        ``def data_callback(sub_results)`` and ``def complete_callback(results)``.
+        The ``should_stop`` function is called on every iteration of the loop that 
+        queries data from the server. If this function is called asynchronously (e.g., 
+        in a separate thread), it is possible to use the return value of should_stop()
+        to stop the execution of the function and return prematurely.
+
 
         Args:
             metadata (:obj:`list` of :str:): The metadata ids to
@@ -778,65 +714,53 @@ class FIRSTServer(object):
                 A function to call when data is receieved from the server.
             complete_callback (:obj:`complete_callback_prototype`, optional):
                 A function to call when the whole long operation completes.
-
+            should_stop (:obj:`should_stop_prototype`, optional):
+                A function called by this function before every query to the server, 
+                to check if the process should be stopped.
         Returns:
-            threading.Thread. The thread created for the operation.
+            dict: JSON data returned from the server. None on failure.
         '''
-        if self.multithreaded:
-            args = (metadata_ids, data_callback, complete_callback)
-            thread = threading.Thread(target=self.__thread_get, args=args)
-            thread.daemon = True
-            thread.start()
-            return thread
-        else:
-            return self.__thread_get(metadata_ids, data_callback, complete_callback)
 
-    def __thread_get(self, metadata, data_callback=None, complete_callback=None):
-        '''Thread to get metadata'''
-        thread = threading.current_thread()
-        self.threads[thread] = {'results': {}, 'complete': False,
-                                'stop': False}
+        results = {}
 
         if not isinstance(metadata, list):
             metadata = [metadata]
 
+        if False in [(isinstance(m, str) or isinstance(m, unicode)) for m in metadata]:
+            raise TypeError("The metadata parameter should be of type 'str' or list('str')")
+
         for i in range(0, len(metadata), self.MAX_CHUNK):
-            if self.threads[thread]['stop']:
+            if should_stop and should_stop():
                 break
 
             data = [m for m in metadata[i:i + self.MAX_CHUNK]]
 
             try:
                 response = self._sendp('get', {'metadata': json.dumps(data)})
-            except FirstServerError as e:
-                self.threads[thread]['complete'] = True
+            except ConnectionError as e:
                 if complete_callback:
-                    complete_callback(thread, self.threads[thread])
-                    return
-                else:
-                    return []
+                    complete_callback(results)
+                return results
 
             if (not response or ('results' not in response)
                     or (dict != type(response['results']))
                     or (not len(response['results']))):
                 continue
 
-            results = {}
+            sub_results = {}
             for metadata_id, details in response['results'].items():
-                results[metadata_id] = FunctionMetadata(details)
+                sub_results[metadata_id] = FunctionMetadata(details)
 
-            if 0 < len(results):
-                for metadata_id in results:
-                    self.threads[thread]['results'][metadata_id] = results[metadata_id]
+            if 0 < len(sub_results):
+                for metadata_id in sub_results:
+                    results[metadata_id] = sub_results[metadata_id]
                 if data_callback:
-                    data_callback(thread, results)
+                    data_callback(sub_results)
 
-        self.threads[thread]['complete'] = True
         if complete_callback:
-            complete_callback(thread, self.threads[thread])
-            return
-        else:
-            return self.threads[thread]['results']
+            complete_callback(results)
+
+        return results
 
     def scan(self, metadata, architecture, data_callback=None, complete_callback=None, should_stop=None):
         '''Queries FIRSTCore for matches.
@@ -870,7 +794,7 @@ class FIRSTServer(object):
                 to check if the process should be stopped.
 
         Returns:
-            list of dict: JSON data returned from the server. None on failure.
+            dict: JSON data returned from the server. None on failure.
         '''
         results = {}
 
@@ -905,7 +829,7 @@ class FIRSTServer(object):
 
             try:
                 response = self._sendp('scan', params)
-            except FirstServerError as e:
+            except ConnectionError as e:
                 if complete_callback:
                     complete_callback(results)
                 return results
